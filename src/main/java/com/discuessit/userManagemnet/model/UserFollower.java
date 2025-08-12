@@ -6,6 +6,10 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
+
+import static jakarta.persistence.FetchType.LAZY;
+
 @Entity
 @Data
 @Builder
@@ -14,17 +18,28 @@ import lombok.NoArgsConstructor;
 @Table(name = "user_follower")
 public class UserFollower {
 
-    @EmbeddedId
-    private UserFollowerId id;
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 
-    @ManyToOne
-    @MapsId("user")  // maps to the field in UserFollowerId
-    @JoinColumn(name = "user_id")
-    private User user;
+    // The user who is being followed
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "followed_user_id", nullable = false)
+    private User followedUser;
 
-    @ManyToOne
-    @MapsId("follower")  // maps to the field in UserFollowerId
-    @JoinColumn(name = "follower_id")
+    // The user who is following
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "follower_id", nullable = false)
     private User follower;
+
+    @Column(name = "created_at", insertable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @Column(name = "updated_at", insertable = false)
+    private LocalDateTime updatedAt;
+
+    @Column(name = "deleted", nullable = false, columnDefinition = "BOOLEAN DEFAULT FALSE")
+    private boolean deleted = false;
+;
 }
 

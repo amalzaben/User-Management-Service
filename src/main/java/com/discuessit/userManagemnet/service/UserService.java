@@ -1,18 +1,21 @@
 package com.discuessit.userManagemnet.service;
 
-import com.discuessit.userManagemnet.dto.UserFollowerResponseDTO;
-import com.discuessit.userManagemnet.dto.UserRequestDTO;
+import com.discuessit.userManagemnet.mapper.dto.controllerDTO.PaginatedResponse;
+import com.discuessit.userManagemnet.mapper.dto.serviceDTO.RegisterUserCommand;
+import com.discuessit.userManagemnet.mapper.dto.controllerDTO.UserFollowerResponse;
 import com.discuessit.userManagemnet.mapper.UserFollowerMapper;
 import com.discuessit.userManagemnet.mapper.UserMapper;
 import com.discuessit.userManagemnet.model.User;
 import com.discuessit.userManagemnet.model.UserFollower;
-import com.discuessit.userManagemnet.model.UserFollowerId;
 import com.discuessit.userManagemnet.repository.UserFollowerRepository;
 import com.discuessit.userManagemnet.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -27,76 +30,117 @@ public class UserService {
     @Autowired
     private UserFollowerMapper userFollowerMapper;
 
-    public long registerUser(UserRequestDTO dto){
-        User user = userMapper.toEntity(dto);
-        userRepository.save(user);
-        return user.getId();
+    public User registerUser(RegisterUserCommand command) {
+        User user = userMapper.toEntity(command);
+        return userRepository.save(user);
     }
 
-    public long login(String username,String password){
-        User user = (User) userRepository.findByUsername(username);
+    public User login(String username, String password) {
+        Optional<User> user = userRepository.findByUsername(username);
 
-        if (user==null) {
-            throw new RuntimeException("Invalid username !!");
+        if (user.isEmpty()) {
+            throw new RuntimeException("Invalid username or password!");
         }
-        if(!user.getPassword().equals(password)){
-            throw new RuntimeException("Invalid password !!");
+
+        User loggedInuser = user.get();
+
+        //temporary since i didn't hash the password yet
+        if (!loggedInuser.getPassword().equals(password)) {
+            throw new RuntimeException("Invalid username or password!");
         }
-        return user.getId();
+
+        return loggedInuser;
     }
 
     public void followUser(Long userId, Long followerId) {
         if (userId.equals(followerId)) {
-            // i don't think this case can happen so i don't know what to do here :)
+            throw new IllegalArgumentException("Users cannot follow themselves");
         }
 
-        User user = userRepository.findById(userId)
+        User followedUser = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
         User follower = userRepository.findById(followerId)
                 .orElseThrow(() -> new RuntimeException("Follower not found"));
 
-        UserFollowerId id = new UserFollowerId(userId, followerId);
+        // Find existing UserFollower relation (even if deleted)
+        Optional<UserFollower> existingRelation = userFollowerRepository
+                .findByFollowedUserAndFollower(followedUser, follower);
 
-        boolean alreadyFollowing = userFollowerRepository.existsById(id);
-        if (alreadyFollowing) {
-            // the UI must not show a following button in this case so this case
-            // and make it clear to the user that they are following this user
+        if (existingRelation.isPresent()) {
+            UserFollower userFollower = existingRelation.get();
+
+            if (!userFollower.isDeleted()) {
+                throw new RuntimeException("You are already following this user");
+            }
+
+            // Reactivate soft-deleted relationship
+            userFollower.setDeleted(false);
+            userFollowerRepository.save(userFollower);
+            return;
         }
 
-        UserFollower userFollower = UserFollower.builder()
-                .id(id)
-                .user(user)
-                .follower(follower)
-                .build();
+        // No existing relation - create new
+        UserFollower userFollower = new UserFollower();
+        userFollower.setFollowedUser(followedUser);
+        userFollower.setFollower(follower);
 
         userFollowerRepository.save(userFollower);
     }
 
-    public List<UserFollowerResponseDTO> listFollowers(Long userId) {
-        List<UserFollower> followers = userFollowerRepository.findByUserId(userId);
-        return followers.stream()
-                .map(userFollowerMapper::toDto)
-                .collect(Collectors.toList());
-    }
+    public void unfollowUser(Long followedUserId, Long followerId) {
+        User followedUser = userRepository.findById(followedUserId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
 
-    public List<UserFollowerResponseDTO> listFollowing(Long followerId) {
-        List<UserFollower> following = userFollowerRepository.findByFollowerId(followerId);
-        return following.stream()
-                .map(userFollowerMapper::toDto)
-                .collect(Collectors.toList());
-    }
+        User follower = userRepository.findById(followerId)
+                .orElseThrow(() -> new RuntimeException("Follower not found"));
 
-    public void unfollowUser(Long userId, Long followerId) {
-        UserFollowerId id = new UserFollowerId(userId, followerId);
+        Optional<UserFollower> relationOpt = userFollowerRepository.findByFollowedUserAndFollower(followedUser, follower);
 
-        boolean exists = userFollowerRepository.existsById(id);
-        if (!exists) {
+        if (relationOpt.isEmpty() || relationOpt.get().isDeleted()) {
             throw new RuntimeException("Follow relationship does not exist.");
         }
 
-        userFollowerRepository.deleteById(id);
+        UserFollower relation = relationOpt.get();
+        relation.setDeleted(true);
+
+        userFollowerRepository.save(relation);
+    }
+
+    public PaginatedResponse<UserFollowerResponse> listFollowers(Long userId, Pageable pageable) {
+        Page<UserFollower> followersPage = userFollowerRepository.findByFollowedUserIdAndDeletedFalse(userId, pageable);
+
+        List<UserFollowerResponse> content = followersPage.stream()
+                .map(userFollowerMapper::toDto)
+                .collect(Collectors.toList());
+
+        return new PaginatedResponse<>(
+                content,
+                followersPage.getNumber(),
+                followersPage.getSize(),
+                followersPage.getTotalElements(),
+                followersPage.getTotalPages(),
+                followersPage.isLast()
+        );
+    }
+
+
+    public PaginatedResponse<UserFollowerResponse> listFollowing(Long userId, Pageable pageable) {
+        Page<UserFollower> followingPage = userFollowerRepository.findByFollowerIdAndDeletedFalse(userId, pageable);
+
+        List<UserFollowerResponse> content = followingPage.stream()
+                .map(userFollowerMapper::toDto)
+                .collect(Collectors.toList());
+
+        return new PaginatedResponse<>(
+                content,
+                followingPage.getNumber(),
+                followingPage.getSize(),
+                followingPage.getTotalElements(),
+                followingPage.getTotalPages(),
+                followingPage.isLast()
+        );
     }
 }
-// i still have points logic, community logic
 
+// i still have points logic, community logic

@@ -13,11 +13,5 @@ public class UserManagemnetApplication {
 	public static void main(String[] args) {
 		SpringApplication.run(UserManagemnetApplication.class, args);
 	}
-	@Bean
-	CommandLineRunner runner(UserRepository userRepository) {
-		return args -> {
-			userRepository.save(new User());
-		};
-	}
 
 }
